@@ -2822,8 +2822,8 @@
                 return;
             }
 
-            // Sample interval alignment at 0.05 second intervals
-            const step = 0.05;
+            // Sample interval alignment at 0.1 second intervals
+            const step = 0.1;
             const totalSteps = Math.min(Math.round(maxOverallT / step), 12000); 
 
             const excelRows = [];
@@ -2839,7 +2839,30 @@
             }
 
             const ws = XLSX.utils.json_to_sheet(excelRows);
-            applyXlsxFormatting(ws);
+            
+            // Format cells: Time (col A) as '0.00' number, and all data columns (col B, C, ...) as '0.000' number
+            for (let cellRef in ws) {
+                if (cellRef.startsWith('!')) continue;
+                const cell = ws[cellRef];
+                if (cell && cell.t === 'n') {
+                    const col = cellRef.replace(/[0-9]/g, '');
+                    if (col === 'A') {
+                        cell.v = parseFloat(Number(cell.v).toFixed(2));
+                        cell.z = '0.00';
+                    } else {
+                        cell.v = parseFloat(Number(cell.v).toFixed(3));
+                        cell.z = '0.000';
+                    }
+                }
+            }
+
+            // Dynamically set column widths
+            const colWidths = [{ wch: 12 }]; // Col A
+            multiviewSelectedList.forEach(() => {
+                colWidths.push({ wch: 20 }); // Col B, C, etc.
+            });
+            ws["!cols"] = colWidths;
+
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Combined Telemetry Sync");
 
