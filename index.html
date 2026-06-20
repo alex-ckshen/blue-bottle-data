@@ -700,6 +700,35 @@
         let selectedSessionId = null;
         let activeChart = null;
 
+        // --- TIMELINE ANOMALY REMEDIATION ENGINE (HEAL RESET TIMESTAMPS) ---
+        function healDatapointsSequence(rawPoints) {
+            if (!rawPoints || rawPoints.length === 0) return [];
+            const list = rawPoints.map(p => ({ ...p }));
+            let cumulativeOffset = 0;
+            let lastRawTime = null;
+            
+            for (let i = 0; i < list.length; i++) {
+                const p = list[i];
+                if (p.timeMillis === undefined || p.timeMillis === null) continue;
+                
+                if (lastRawTime !== null && p.timeMillis < lastRawTime) {
+                    cumulativeOffset += (lastRawTime - p.timeMillis) + 1000;
+                }
+                
+                lastRawTime = p.timeMillis;
+                p.timeMillis = p.timeMillis + cumulativeOffset;
+            }
+            return list;
+        }
+
+        function getHealedDatapoints(session) {
+            if (!session || !session.datapoints) return [];
+            const rawPoints = Object.values(session.datapoints);
+            const healed = healDatapointsSequence(rawPoints);
+            healed.sort((a, b) => a.timeMillis - b.timeMillis);
+            return healed;
+        }
+
         // Multiview state variables
         let multiviewSelectedList = [];
         let multiviewChartInstance = null;
@@ -1042,8 +1071,7 @@
 
             // Yield thread for browser painting of the loading indicator
             setTimeout(() => {
-                const rawPoints = session.datapoints ? Object.values(session.datapoints) : [];
-                const sortedPoints = rawPoints.sort((a,b) => a.timeMillis - b.timeMillis);
+                const sortedPoints = getHealedDatapoints(session);
 
                 buildActiveSessionChart(sortedPoints);
 
@@ -1221,13 +1249,12 @@
             const session = studioSessions[`session_${selectedSessionId}`] || studioSessions[selectedSessionId];
             if (!session) return;
 
-            const rawPoints = session.datapoints ? Object.values(session.datapoints) : [];
-            if (rawPoints.length === 0) {
+            const sorted = getHealedDatapoints(session);
+            if (sorted.length === 0) {
                 showToast("Cannot export empty dataset.", true);
                 return;
             }
 
-            const sorted = rawPoints.sort((a,b) => a.timeMillis - b.timeMillis);
             const baseTime = sorted[0].timeMillis;
             const excelRows = sorted.map(p => ({
                 "t": parseFloat(((p.timeMillis - baseTime) / 1000.0).toFixed(3)),
@@ -1496,19 +1523,20 @@
                             return;
                         }
 
-                        // Compute basic stats
+                        // Compute basic stats with healed timeline sequence
+                        const healedPoints = healDatapointsSequence(points);
                         let sum = 0;
-                        let maxVal = points[0].lux;
-                        let minVal = points[0].lux;
+                        let maxVal = healedPoints[0].lux;
+                        let minVal = healedPoints[0].lux;
                         
-                        points.forEach(p => {
+                        healedPoints.forEach(p => {
                             sum += p.lux;
                             if (p.lux > maxVal) maxVal = p.lux;
                             if (p.lux < minVal) minVal = p.lux;
                         });
                         
-                        const avgVal = sum / points.length;
-                        const durationMs = points[points.length - 1].timeMillis - points[0].timeMillis;
+                        const avgVal = sum / healedPoints.length;
+                        const durationMs = healedPoints[healedPoints.length - 1].timeMillis - healedPoints[0].timeMillis;
                         
                         // Create session structure
                         const baseFilename = file.name.replace(/\.[^/.]+$/, ""); // strip extension
@@ -1522,11 +1550,11 @@
                             id: sessionDbId,
                             title: customTitle,
                             timestamp: Date.now() + (fileIdx * 10), // slight offset to maintain chronological insertion
-                            durationMs: durationMs > 0 ? durationMs : (points.length * 100), // default to 100ms interval
+                            durationMs: durationMs > 0 ? durationMs : (healedPoints.length * 100), // default to 100ms interval
                             avgLux: avgVal,
                             maxLux: maxVal,
                             minLux: minVal,
-                            datapoints: points
+                            datapoints: healedPoints
                         };
 
                         // Set onto Studio database
@@ -1641,13 +1669,12 @@
             const session = studioSessions[`session_${cleanId}`] || studioSessions[cleanId];
             if (!session) return;
             
-            const rawPoints = session.datapoints ? Object.values(session.datapoints) : [];
-            if (rawPoints.length === 0) {
+            const sorted = getHealedDatapoints(session);
+            if (sorted.length === 0) {
                 showToast("Cannot import an empty session.", true);
                 return;
             }
             
-            const sorted = rawPoints.sort((a,b) => a.timeMillis - b.timeMillis);
             const baseTime = sorted[0].timeMillis;
             const durationMs = session.durationMs || (sorted[sorted.length - 1].timeMillis - baseTime) || 1;
             const durationSec = durationMs / 1000.0;
@@ -2596,8 +2623,7 @@
                     showToast(`Session not found in sandbox database.`, true);
                     return;
                 }
-                const rawPoints = session.datapoints ? Object.values(session.datapoints) : [];
-                const sorted = rawPoints.sort((a,b) => a.timeMillis - b.timeMillis);
+                const sorted = getHealedDatapoints(session);
                 if (sorted.length === 0) {
                     showToast("Cannot add empty session.", true);
                     return;
@@ -2880,7 +2906,7 @@
         function interpolateLuxAtT(points, targetT) {
             if (!points || points.length === 0) return null;
             if (targetT <= points[0].t) return parseFloat(points[0].lux.toFixed(3));
-            if (targetT > points[points.length - 1].t) return 0;
+            if (targetT > points[points.length - 1].t) return null;
             if (targetT === points[points.length - 1].t) return parseFloat(points[points.length - 1].lux.toFixed(3));
 
             for (let i = 0; i < points.length - 1; i++) {
