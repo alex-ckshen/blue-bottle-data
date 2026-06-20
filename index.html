@@ -704,6 +704,10 @@
         function healDatapointsSequence(rawPoints) {
             if (!rawPoints || rawPoints.length === 0) return [];
             const list = rawPoints.map(p => ({ ...p }));
+            
+            // To prevent minor out-of-order jitter from being mistaken as a timer reset,
+            // we ONLY heal if there is a significant backward time jump (e.g. drop of > 10,000ms or 10 seconds).
+            // A tiny drop of a few milliseconds is just noise/jitter and should be ignored.
             let cumulativeOffset = 0;
             let lastRawTime = null;
             
@@ -711,12 +715,13 @@
                 const p = list[i];
                 if (p.timeMillis === undefined || p.timeMillis === null) continue;
                 
-                if (lastRawTime !== null && p.timeMillis < lastRawTime) {
-                    cumulativeOffset += (lastRawTime - p.timeMillis) + 1000;
+                const rawTime = p.timeMillis;
+                if (lastRawTime !== null && (lastRawTime - rawTime) > 10000) {
+                    cumulativeOffset += lastRawTime; // Carry forward the last active time before reset
                 }
                 
-                lastRawTime = p.timeMillis;
-                p.timeMillis = p.timeMillis + cumulativeOffset;
+                lastRawTime = rawTime;
+                p.timeMillis = rawTime + cumulativeOffset;
             }
             return list;
         }
@@ -2860,7 +2865,7 @@
                 multiviewSelectedList.forEach(item => {
                     const val = interpolateLuxAtT(item.datapoints, currentT);
                     if (val === 0 || val === null || val === undefined) {
-                        row[item.title] = "";
+                        // Do not set row[item.title] so SheetJS treats it as a missing key
                     } else {
                         row[item.title] = val;
                     }
@@ -2872,7 +2877,7 @@
             const ws = XLSX.utils.json_to_sheet(excelRows);
             
             // Format cells: Time (col A) as '0.00' number, and all data columns (col B, C, ...) as '0.000' number
-            // If any data value is 0 or empty/null, format as blank cell so it doesn't display as 0.000
+            // If any data value is 0 or empty/null, delete the cell entirely from 'ws' so it's a true blank in Excel.
             for (let cellRef in ws) {
                 if (cellRef.startsWith('!')) continue;
                 const cell = ws[cellRef];
@@ -2884,10 +2889,8 @@
                             cell.z = '0.00';
                         }
                     } else {
-                        if (cell.v === 0 || cell.v === '0' || cell.v === '') {
-                            cell.t = 's';
-                            cell.v = '';
-                            if (cell.z) delete cell.z;
+                        if (cell.v === 0 || cell.v === '0' || cell.v === '' || cell.v === null || cell.v === undefined) {
+                            delete ws[cellRef];
                         } else if (cell.t === 'n') {
                             cell.v = parseFloat(Number(cell.v).toFixed(3));
                             cell.z = '0.000';
