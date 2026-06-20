@@ -2858,7 +2858,12 @@
                 const row = { "t": currentT };
                 
                 multiviewSelectedList.forEach(item => {
-                    row[item.title] = interpolateLuxAtT(item.datapoints, currentT);
+                    const val = interpolateLuxAtT(item.datapoints, currentT);
+                    if (val === 0 || val === null || val === undefined) {
+                        row[item.title] = "";
+                    } else {
+                        row[item.title] = val;
+                    }
                 });
                 
                 excelRows.push(row);
@@ -2867,17 +2872,26 @@
             const ws = XLSX.utils.json_to_sheet(excelRows);
             
             // Format cells: Time (col A) as '0.00' number, and all data columns (col B, C, ...) as '0.000' number
+            // If any data value is 0 or empty/null, format as blank cell so it doesn't display as 0.000
             for (let cellRef in ws) {
                 if (cellRef.startsWith('!')) continue;
                 const cell = ws[cellRef];
-                if (cell && cell.t === 'n') {
+                if (cell) {
                     const col = cellRef.replace(/[0-9]/g, '');
                     if (col === 'A') {
-                        cell.v = parseFloat(Number(cell.v).toFixed(2));
-                        cell.z = '0.00';
+                        if (cell.t === 'n') {
+                            cell.v = parseFloat(Number(cell.v).toFixed(2));
+                            cell.z = '0.00';
+                        }
                     } else {
-                        cell.v = parseFloat(Number(cell.v).toFixed(3));
-                        cell.z = '0.000';
+                        if (cell.v === 0 || cell.v === '0' || cell.v === '') {
+                            cell.t = 's';
+                            cell.v = '';
+                            if (cell.z) delete cell.z;
+                        } else if (cell.t === 'n') {
+                            cell.v = parseFloat(Number(cell.v).toFixed(3));
+                            cell.z = '0.000';
+                        }
                     }
                 }
             }
